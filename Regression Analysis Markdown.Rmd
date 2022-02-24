@@ -1,0 +1,95 @@
+---
+title: "Data Exploration Regression Analysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+#Loading libraries
+```{r}
+library(vtable)
+library(jtools)
+library(tidyverse)
+library(purrr)
+library(fixest)
+library(readxl)
+library(dplyr)
+library(lubridate)
+```
+
+
+#Read Clean Data file
+```{r}
+Clean_data <- read_csv("Clean_data")
+```
+
+#Some notes about the cleaning process:
+
+- After joining the tables, I filtered out the bachelor's colleges, since that is what the research question is asking for. Therefore, all the data in Clean_data.csv only includes colleges that are predominantly bachelor's degrees, so that is already controlled for. 
+
+- I determined that colleges with median earnings above $64,896 should be considered high earning, and colleges with median earnings below this value should be considered low earning because this is the average income for adults that have completed their bachelor's degree according to research by Northeastern University. The data was sourced from the US Bureau of Labor Statistics.  https://www.northeastern.edu/bachelors-completion/news/average-salary-by-education-level/
+
+- Since the college scorecard was released at the start of September 2015, I transformed the date into a variable called after_scorecard, which is true if the row is from after 08-31-2015, and false if it is before. This allows us to group the standardized indexes by after or before the treatment, which is useful for our regression. 
+
+- I standardized the index score so that we can compare indexes across schools. I grouped by the school name, and then divided the index score by the mean index score for the school, then divided it by the standard deviation for the school. The standardized indexes are called "index.s". 
+
+- I decided to leave the data as is with one row per week per keyword instead of grouping it by week or month per college. Since I was transforming the time variables into a binary variable of being before or after the scorecard, grouping the data is not necessary for the initial regression. I will be grouping the data by month later for viewing the plot and analyzing trends.  
+
+#Selecting Important columns
+Here I am cleaning and selecting the columns that will be pertinent to our regression. By cutting down the variables, our data is easier to view and analyze, so our regression process can be more straightforward. The columns we care most about are index.s (standardized index), after_scorecard, and income_level, but the other columns are identifiers and help provide more context. 
+
+```{r}
+Clean_data <- Clean_data %>% drop_na()
+Clean_data <- rename(Clean_data, income_level = high_income)
+regression_data <- select(Clean_data, schid, schname, keyword, unitid.x, opeid, median_earnings, index.s, date, after_scorecard, income_level)
+```
+
+#Choosing regression
+Using the difference in difference regression model works best for this data analysis, because we are trying to do a multivariate regression with two binary variables, one of which is time before and after the treatment (release of the scorecard), and the other which can be treatment/control groups: low income and high income colleges. Since one of the variables is time-related, it makes sense to think about this research question with a difference in difference framework. Although this situation is not exactly a difference in difference because the scorecard is not the treatment and affects both the treatment group and control group(low income and high income colleges), utilizing the interaction term in the regression works well here. The interaction terms lets us know as a college changes from low-income to high-income, what is the change in effect of the Scorecard on their indexes. This lets us answer the research question whether the scorecard shifted student interest towards high-earning colleges compared to low ones. Since we standardized the indexes(index.s), the regression will not tell us the original index number, but indexes in relation to its mean. 
+
+#Summary table of mean standardized indexes
+This gives us the mean standardized indexes of the treatment and control group, before and after the control group. This matches the results our regression should give, but allows us to directly compare the means. 
+```{r pressure, echo=FALSE}
+group_by_data <- regression_data %>% 
+  group_by(after_scorecard, income_level)%>%
+  summarize(index= mean(index.s))
+  view(group_by_data)
+```
+The data shows the following means of standardized indexes:
+- Before the scorecard, high income colleges had a mean index of .047
+- After the scorecard, high income colleges had a mean index of -.203
+
+-Before the scorecard, low income colleges had a mean index of .033
+- After the scorecard, low income colleges had a mean index of -.142
+
+From first glance, it seems like indexes dropped after the scorecard came out, which seems counter-intuitive. But we can analyze the regression and graph to learn more. 
+
+#Regression
+```{r}
+regression1 <- lm(index.s ~ income_level*after_scorecard, data = regression_data)
+export_summs(regression1, robust = TRUE, digits = 4)
+```
+*Note: I added robust = true to add robust standard errors in case there was heteroskedasticity. To be safe, it is better to add this. 
+
+#Analysis of Regression
+In this regression, "low income" is considered the treated variable. Consistent with the group_by_data table, the regression showed that high-income colleges had a mean index of .0473 before the scorecard, since the intercept coefficient shows what the mean index would be if all other variables are 0. The income_levelLow coefficient shows that low-income colleges had a -.0144 lower index than the high-income colleges before the Scorecard. This makes sense since high-income colleges may be more reputable, therefore more searched than low-income ones. The coefficient for after_scorecardTRUE indicates that the mean of indexes decreased by .251 after the scorecards was released. This seems counter-intuitive because we would think that if the college scorecard reported the high earnings of these colleges, most prospective students would be draw to them and would search for them more. This is what the research question is seeking to understand. The interaction term coefficient shows that as a college switches from high income to low income, the effect of the scorecard would be 7.6 percentage points larger for the index of the college. This goes against our research hypothesis, that the scorecard would have a greater effect on high income colleges. So let's look at the graph of the data to understand what's going on here.  
+
+#Plotting Data
+```{r}
+plot_data <- regression_data %>%
+  group_by(income_level, month=floor_date(date, "month")) %>%
+  summarize (index.s = mean(index.s))
+  
+ggplot(plot_data, aes(x = month, y = index.s, color = income_level)) + geom_line() + geom_vline(xintercept = as.Date('2015-08-31'))
+```
+I grouped the data by month and income level so that we could analyze index trends over time better. The vertical line is the date in which the scorecard was released. The graph tells us that indexes seems to have a slight downward trend over time, both high and low income colleges follow a similar yearly trend of peak and troughs. These peaks and troughs of Google searches likely aligns with application and admission times for undergraduate colleges. Usually students are concerned with college applications from August-March, the busiest of which is usually September- November which aligns with the peaks. Once students have been accepted and make college decisions (often by April or May), the indexes would go down again. 
+
+This graph indicates that the lines for high income and low income tend to follow similar trends, even after the treatment of the Scorecard. Therefore, it seems like the Scorecard does not have a major effect on indexes. This would also explain the weirdness of the results we got before, that low income colleges had a higher index after the college scorecard was released than high income colleges. We would assume that if the college scorecard showed that graduates from certain colleges made more money than other ones, this would draw people towards those higher earning colleges. But since the peak indexes of low-earning colleges tended to be higher than higher-earning colleges, this indicates that this trend simply continued and the scorecard may not have effected indexes very much.
+
+One reason for the results we have gotten could be endogeneity. There could be other factors affecting both whether a college is low-income or high-income and their indexes. For example, the selectivity of admissions could affect both. Really prestigious schools that have high-earning graduates could have a really low acceptance rate and small school sizes, so a large majority of students may not be interested in applying, and will not look the school up on Google. Large state schools that are easy to get in to may have lower-earning graduates, but more students may be interested in applying to them. Therefore, effects such as school size or admission rates could be endogenous variables that overshadow the effect of the college scorecard. Future studies can analyze if these variables are controlled for, if the college scorecard would have more of an effect. The College Scorecard dictionary mentioned the variables of CCUGPROF which represents the undergraduate profile, or CCSIZSET which represents the size and setting of each school. However, since these variables are not in the Most Recent Cohorts Data set, I was not able to control for these. Therefore, more data collection and research needs to be done to conduct that analysis. 
+
+Another reasons for the regression results could be that prospective students did not pay much attention to the college scorecard, factors other than median earnings after college could be more important to students when searching for colleges, or the index may not be a good metric to gauge student interest. There could be many reasons for getting the results we did, but we can conclude from our results that the College Scorecard did not have a big impact in shifting student interest from low-earning to high-earning colleges. 
+
